@@ -1,0 +1,65 @@
+openapi: 3.1.0
+info:
+  title: Gulpo Panel API
+  version: 0.1.0
+paths:
+  /api/admin/login:
+    post:
+      summary: Login single admin and receive JWT.
+  /api/admin/users:
+    get:
+      summary: List users.
+    post:
+      summary: Create user.
+  /api/admin/users/{id}:
+    patch:
+      summary: Update user.
+    delete:
+      summary: Delete user.
+  /api/admin/users/{id}/tags:
+    post:
+      summary: Replace user tags.
+  /api/admin/users/{id}/subscription/rotate:
+    post:
+      summary: Rotate subscription token.
+  /api/subscriptions/{token}:
+    get:
+      summary: Get sing-box JSON subscription.
+  /api/admin/nodes:
+    get:
+      summary: List nodes.
+    post:
+      summary: Create node.
+  /api/admin/nodes/{id}:
+    patch:
+      summary: Update node.
+    delete:
+      summary: Delete node.
+  /api/admin/nodes/{id}/enroll-token/rotate:
+    post:
+      summary: Rotate node enroll token.
+  /api/admin/nodes/{id}/commands:
+    post:
+      summary: Create node command.
+  /api/admin/nodes/{id}/config:
+    get:
+      summary: Get node override config.
+    patch:
+      summary: Update node override config.
+  /api/admin/config/global:
+    get:
+      summary: Get global config.
+    patch:
+      summary: Update global config.
+  /api/node/enroll:
+    post:
+      summary: Enroll node and receive api key/config.
+  /api/node/heartbeat:
+    post:
+      summary: Send node heartbeat.
+  /api/node/sync:
+    post:
+      summary: Pull config and commands, report command results.
+  /api/node/usage/batch:
+    post:
+      summary: Report usage records.
