@@ -1,6 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "Gulpo Panel",
@@ -10,7 +10,16 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body
+        style={
+          {
+            "--font-display": '"Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif',
+            "--font-text": '"Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+          } as CSSProperties
+        }
+      >
+        {children}
+      </body>
     </html>
   );
 }

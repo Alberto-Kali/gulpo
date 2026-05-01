@@ -25,6 +25,9 @@ paths:
   /api/subscriptions/{token}:
     get:
       summary: Get sing-box JSON subscription.
+  /api/subj/{token}:
+    get:
+      summary: Get Shadowsocks client profiles for the user-facing subscription page.
   /api/admin/nodes:
     get:
       summary: List nodes.
@@ -46,6 +49,9 @@ paths:
       summary: Get node override config.
     patch:
       summary: Update node override config.
+  /api/admin/nodes/{id}/events:
+    get:
+      summary: Get recent node events.
   /api/admin/config/global:
     get:
       summary: Get global config.
@@ -63,3 +69,6 @@ paths:
   /api/node/usage/batch:
     post:
       summary: Report usage records.
+  /api/node/events/batch:
+    post:
+      summary: Report node events.

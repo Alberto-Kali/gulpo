@@ -89,9 +89,16 @@ func RandomToken(length int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+func RandomBase64Key(length int) (string, error) {
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
 func sign(value, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(value))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
-

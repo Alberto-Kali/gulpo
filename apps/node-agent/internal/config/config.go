@@ -6,14 +6,17 @@ import (
 )
 
 type Config struct {
-	PanelBaseURL    string
-	EnrollToken     string
-	NodeAPIKey      string
-	AgentVersion    string
-	SingboxVersion  string
-	StateDir        string
-	PollInterval    time.Duration
-	HeartbeatEvery  time.Duration
+	PanelBaseURL   string
+	EnrollToken    string
+	NodeAPIKey     string
+	AgentVersion   string
+	SingboxVersion string
+	StateDir       string
+	PollInterval   time.Duration
+	HeartbeatEvery time.Duration
+	TelemetryEvery time.Duration
+	V2RayAPIListen string
+	ClashAPIURL    string
 }
 
 func Load() Config {
@@ -26,6 +29,9 @@ func Load() Config {
 		StateDir:       env("NODE_STATE_DIR", "/var/lib/gulpo-node"),
 		PollInterval:   duration("NODE_POLL_INTERVAL", 30*time.Second),
 		HeartbeatEvery: duration("NODE_HEARTBEAT_EVERY", 15*time.Second),
+		TelemetryEvery: duration("NODE_TELEMETRY_EVERY", 20*time.Second),
+		V2RayAPIListen: env("NODE_V2RAY_API_LISTEN", "127.0.0.1:11085"),
+		ClashAPIURL:    env("NODE_CLASH_API_URL", "http://127.0.0.1:19090"),
 	}
 }
 
@@ -47,4 +53,3 @@ func duration(key string, fallback time.Duration) time.Duration {
 	}
 	return parsed
 }
-

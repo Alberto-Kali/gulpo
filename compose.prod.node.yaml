@@ -1,0 +1,28 @@
+services:
+  node:
+    image: ${NODE_IMAGE}
+    container_name: gulpo_node
+    restart: unless-stopped
+    env_file:
+      - deploy/env/node.env
+    environment:
+      NODE_PANEL_BASE_URL: ${NODE_PANEL_BASE_URL}
+      NODE_ENROLL_TOKEN: ${NODE_ENROLL_TOKEN}
+      NODE_AGENT_VERSION: ${NODE_AGENT_VERSION}
+      NODE_SINGBOX_VERSION: ${NODE_SINGBOX_VERSION}
+      NODE_STATE_DIR: /var/lib/gulpo-node
+      NODE_POLL_INTERVAL: ${NODE_POLL_INTERVAL}
+      NODE_HEARTBEAT_EVERY: ${NODE_HEARTBEAT_EVERY}
+      NODE_TELEMETRY_EVERY: ${NODE_TELEMETRY_EVERY}
+      NODE_V2RAY_API_LISTEN: ${NODE_V2RAY_API_LISTEN}
+      NODE_CLASH_API_URL: ${NODE_CLASH_API_URL}
+    ports:
+      - "8443:8443"
+      - "8443:8443/udp"
+      - "8444:8443/udp"
+    volumes:
+      - node-state:/var/lib/gulpo-node
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+
+volumes:
+  node-state:

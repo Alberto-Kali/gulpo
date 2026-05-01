@@ -1,4 +1,6 @@
-import { Dashboard } from "../components/dashboard";
+import { HomeDashboard } from "../components/home-dashboard";
+
+export const dynamic = "force-dynamic";
 
 export default function Home() {
   return (
@@ -16,9 +18,8 @@ export default function Home() {
             subscriptions, and traffic limits for independent sing-box nodes.
           </p>
         </section>
-        <Dashboard defaultEmail="admin@example.com" />
+        <HomeDashboard />
       </div>
     </main>
   );
 }
-

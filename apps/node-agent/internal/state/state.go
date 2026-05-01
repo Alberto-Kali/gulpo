@@ -7,11 +7,25 @@ import (
 )
 
 type RuntimeState struct {
-	NodeID             string            `json:"node_id"`
-	NodeAPIKey         string            `json:"node_api_key"`
-	DesiredConfig      map[string]any    `json:"desired_config"`
-	LastAppliedConfig  map[string]any    `json:"last_applied_config"`
-	LastKnownGood      map[string]any    `json:"last_known_good"`
+	NodeID              string                       `json:"node_id"`
+	NodeAPIKey          string                       `json:"node_api_key"`
+	DesiredConfig       map[string]any               `json:"desired_config"`
+	LastAppliedConfig   map[string]any               `json:"last_applied_config"`
+	LastKnownGood       map[string]any               `json:"last_known_good"`
+	LastTrafficCounters map[string]UserTrafficSample `json:"last_traffic_counters"`
+	PendingUsageRecords []PendingUsageRecord         `json:"pending_usage_records"`
+}
+
+type UserTrafficSample struct {
+	UplinkBytes   int64 `json:"uplink_bytes"`
+	DownlinkBytes int64 `json:"downlink_bytes"`
+}
+
+type PendingUsageRecord struct {
+	UserID        string `json:"user_id"`
+	UplinkBytes   int64  `json:"uplink_bytes"`
+	DownlinkBytes int64  `json:"downlink_bytes"`
+	CollectedAt   string `json:"collected_at"`
 }
 
 func Load(dir string) (RuntimeState, error) {
@@ -40,4 +54,3 @@ func Save(dir string, st RuntimeState) error {
 	}
 	return os.WriteFile(filepath.Join(dir, "state.json"), body, 0o644)
 }
-

@@ -16,14 +16,14 @@ type App struct {
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.DatabaseURL, cfg.SSSecretKey)
 	if err != nil {
 		return nil, err
 	}
 	if err := st.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	if err := st.SeedAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+	if err := st.SeedAdmin(ctx, cfg.AdminLogin, cfg.AdminEmail, cfg.AdminPassword); err != nil {
 		return nil, err
 	}
 	handler := handlers.New(cfg, st)
@@ -41,4 +41,3 @@ func (a *App) Run() error {
 	defer a.store.Close()
 	return a.server.ListenAndServe()
 }
-
