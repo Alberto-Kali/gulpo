@@ -18,8 +18,8 @@ services:
       NODE_CLASH_API_URL: ${NODE_CLASH_API_URL}
     ports:
       - "8443:8443"
-      - "8443:8443/udp"
-      - "8444:8443/udp"
+      - "2087:2087/udp"
+      - "8444:2087/udp"
     volumes:
       - node-state:/var/lib/gulpo-node
       - /etc/letsencrypt:/etc/letsencrypt:ro
