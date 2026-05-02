@@ -4,9 +4,9 @@ export const dynamic = "force-dynamic";
 
 const RAW_PROTOCOLS = new Set(["trojan", "hysteria2", "shadowsocks", "vless"]);
 
-export async function GET(_: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const result = await getSubjProfiles(token);
+  const result = await getSubjProfiles(token, request);
 
   if (!result.data) {
     return new Response(result.error ?? "not found", {

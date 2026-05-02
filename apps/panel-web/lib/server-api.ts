@@ -42,9 +42,40 @@ function getInternalAPIBase() {
   return process.env.PANEL_API_INTERNAL_BASE_URL || "http://localhost:8080";
 }
 
-export async function getSubjProfiles(token: string): Promise<{ data?: ProfilePageResponse; error?: string; status: number }> {
-  const response = await fetch(`${getInternalAPIBase()}/api/subj/${token}`, {
+function forwardedSubscriptionHeaders(source?: Headers) {
+  const headers: Record<string, string> = {};
+  if (!source) return headers;
+  const forwardKeys = [
+    "user-agent",
+    "accept",
+    "accept-language",
+    "x-forwarded-for",
+    "x-real-ip",
+    "cf-connecting-ip",
+    "x-hwid",
+    "x-device-id",
+    "x-device",
+    "x-client-id",
+    "x-client",
+    "client-id",
+    "device-id",
+  ];
+  for (const key of forwardKeys) {
+    const value = source.get(key);
+    if (value) {
+      headers[key] = value;
+    }
+  }
+  return headers;
+}
+
+export async function getSubjProfiles(token: string, request?: Request | Headers, search = ""): Promise<{ data?: ProfilePageResponse; error?: string; status: number }> {
+  const sourceHeaders = request instanceof Request ? request.headers : request;
+  const sourceURL = request instanceof Request ? new URL(request.url) : null;
+  const query = sourceURL?.search ?? search;
+  const response = await fetch(`${getInternalAPIBase()}/api/subj/${token}${query}`, {
     cache: "no-store",
+    headers: forwardedSubscriptionHeaders(sourceHeaders),
   });
 
   if (!response.ok) {

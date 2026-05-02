@@ -26,6 +26,11 @@ type PostgresStore struct {
 	secrets *secretcrypto.SecretBox
 }
 
+var (
+	ErrSubscriptionDeviceIDRequired   = errors.New("subscription device hwid is required")
+	ErrSubscriptionDeviceLimitReached = errors.New("subscription device limit reached")
+)
+
 func Open(ctx context.Context, databaseURL, ssSecretKey string) (*PostgresStore, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -82,7 +87,7 @@ func (s *PostgresStore) GetAdminByLogin(ctx context.Context, login string) (doma
 
 func (s *PostgresStore) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at
+		select id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, subscription_device_limit, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at
 		from users
 		order by created_at desc`)
 	if err != nil {
@@ -102,6 +107,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]domain.User, error) {
 			&user.TrafficUsedBytes,
 			&user.SubscriptionToken,
 			&user.NodeAccessMode,
+			&user.SubscriptionDeviceLimit,
 			&user.SSPasswordEncrypted,
 			&user.TrojanPasswordEncrypted,
 			&user.VLESSUUID,
@@ -152,6 +158,9 @@ func (s *PostgresStore) GetDashboardSummary(ctx context.Context) (domain.Dashboa
 }
 
 func (s *PostgresStore) CreateUser(ctx context.Context, user domain.User) (domain.User, error) {
+	if user.SubscriptionDeviceLimit < 0 {
+		user.SubscriptionDeviceLimit = 0
+	}
 	if user.ID == "" {
 		user.ID = uuid.NewString()
 	}
@@ -166,8 +175,8 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user domain.User) (domai
 		return domain.User{}, err
 	}
 	err := s.db.QueryRowContext(ctx, `
-		insert into users (id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now())
+		insert into users (id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, subscription_device_limit, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now())
 		returning created_at, updated_at`,
 		user.ID,
 		user.ExternalID,
@@ -177,6 +186,7 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user domain.User) (domai
 		user.TrafficUsedBytes,
 		user.SubscriptionToken,
 		user.NodeAccessMode,
+		user.SubscriptionDeviceLimit,
 		user.SSPasswordEncrypted,
 		user.TrojanPasswordEncrypted,
 		user.VLESSUUID,
@@ -188,12 +198,15 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user domain.User) (domai
 }
 
 func (s *PostgresStore) UpdateUser(ctx context.Context, id string, user domain.User) (domain.User, error) {
+	if user.SubscriptionDeviceLimit < 0 {
+		user.SubscriptionDeviceLimit = 0
+	}
 	row := s.db.QueryRowContext(ctx, `
 		update users
-		set external_id = $2, name = $3, status = $4, traffic_limit_bytes = $5, node_access_mode = $6, updated_at = now()
+		set external_id = $2, name = $3, status = $4, traffic_limit_bytes = $5, node_access_mode = $6, subscription_device_limit = $7, updated_at = now()
 		where id = $1
-		returning id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at`,
-		id, user.ExternalID, user.Name, user.Status, user.TrafficLimitBytes, user.NodeAccessMode,
+		returning id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, subscription_device_limit, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at`,
+		id, user.ExternalID, user.Name, user.Status, user.TrafficLimitBytes, user.NodeAccessMode, user.SubscriptionDeviceLimit,
 	)
 	var out domain.User
 	err := row.Scan(
@@ -205,6 +218,7 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id string, user domain.U
 		&out.TrafficUsedBytes,
 		&out.SubscriptionToken,
 		&out.NodeAccessMode,
+		&out.SubscriptionDeviceLimit,
 		&out.SSPasswordEncrypted,
 		&out.TrojanPasswordEncrypted,
 		&out.VLESSUUID,
@@ -229,7 +243,7 @@ func (s *PostgresStore) DeleteUser(ctx context.Context, id string) error {
 
 func (s *PostgresStore) GetUserBySubscriptionToken(ctx context.Context, token string) (domain.User, error) {
 	row := s.db.QueryRowContext(ctx, `
-		select id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at
+		select id, external_id, name, status, traffic_limit_bytes, traffic_used_bytes, subscription_token, node_access_mode, subscription_device_limit, ss_password_encrypted, trojan_password_encrypted, vless_uuid, hysteria2_password_encrypted, tuic_uuid, tuic_password_encrypted, created_at, updated_at
 		from users where subscription_token = $1`, token)
 	var user domain.User
 	err := row.Scan(
@@ -241,6 +255,7 @@ func (s *PostgresStore) GetUserBySubscriptionToken(ctx context.Context, token st
 		&user.TrafficUsedBytes,
 		&user.SubscriptionToken,
 		&user.NodeAccessMode,
+		&user.SubscriptionDeviceLimit,
 		&user.SSPasswordEncrypted,
 		&user.TrojanPasswordEncrypted,
 		&user.VLESSUUID,
@@ -947,6 +962,7 @@ func (s *PostgresStore) BuildSubscription(ctx context.Context, user domain.User)
 		if err != nil {
 			return domain.SubscriptionEnvelope{}, err
 		}
+		stripControlPlaneConfig(nodeConfig)
 		nodeConfig["domain"] = node.Domain
 		nodeConfig["user"] = map[string]any{
 			"id":                 user.ID,
@@ -1003,6 +1019,7 @@ func (s *PostgresStore) BuildNodeDesiredConfig(ctx context.Context, node domain.
 	if err != nil {
 		return nil, err
 	}
+	stripControlPlaneConfig(merged)
 	users, err := s.ListEligibleUsersForNode(ctx, node)
 	if err != nil {
 		return nil, err
@@ -1033,6 +1050,7 @@ func (s *PostgresStore) BuildMergedNodeConfig(ctx context.Context, node domain.N
 			merged = mergeMap(merged, override)
 		}
 	}
+	applyNodeTemplateValues(merged, node)
 	return cloneMap(merged), nil
 }
 
@@ -1467,6 +1485,75 @@ func coalesceString(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func stripControlPlaneConfig(cfg map[string]any) {
+	delete(cfg, "camouflage")
+	delete(cfg, "node_template")
+}
+
+func applyNodeTemplateValues(cfg map[string]any, node domain.Node) {
+	applyTemplateMap(cfg, nodeTemplateValues(node))
+}
+
+func nodeTemplateValues(node domain.Node) map[string]string {
+	domainName := normalizeServer(node.Domain)
+	certDir := ""
+	certPath := ""
+	keyPath := ""
+	if domainName != "" {
+		certDir = "/etc/letsencrypt/live/" + domainName
+		certPath = certDir + "/fullchain.pem"
+		keyPath = certDir + "/privkey.pem"
+	}
+	return map[string]string{
+		"__GULPO_NODE_DOMAIN__":          domainName,
+		"__GULPO_NODE_HOST__":            domainName,
+		"__GULPO_TLS_CERT_DIR__":         certDir,
+		"__GULPO_TLS_CERTIFICATE_PATH__": certPath,
+		"__GULPO_TLS_KEY_PATH__":         keyPath,
+		"{{node.domain}}":                domainName,
+		"{{node.host}}":                  domainName,
+		"{{node.tls_cert_dir}}":          certDir,
+		"{{node.tls_certificate_path}}":  certPath,
+		"{{node.tls_key_path}}":          keyPath,
+		"${node.domain}":                 domainName,
+		"${node.host}":                   domainName,
+		"${node.tls_cert_dir}":           certDir,
+		"${node.tls_certificate_path}":   certPath,
+		"${node.tls_key_path}":           keyPath,
+	}
+}
+
+func applyTemplateMap(cfg map[string]any, values map[string]string) {
+	for key, value := range cfg {
+		cfg[key] = applyTemplateValue(value, values)
+	}
+}
+
+func applyTemplateValue(value any, values map[string]string) any {
+	switch typed := value.(type) {
+	case string:
+		return replaceTemplateTokens(typed, values)
+	case map[string]any:
+		applyTemplateMap(typed, values)
+		return typed
+	case []any:
+		for index, item := range typed {
+			typed[index] = applyTemplateValue(item, values)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func replaceTemplateTokens(value string, values map[string]string) string {
+	out := value
+	for token, replacement := range values {
+		out = strings.ReplaceAll(out, token, replacement)
+	}
+	return out
 }
 
 func applyNodeTLSDefaults(inbound map[string]any, node domain.Node) {
@@ -2191,6 +2278,10 @@ func defaultGlobalConfig() map[string]any {
 		"log":       map[string]any{"level": "info"},
 		"route":     map[string]any{"final": "direct"},
 		"outbounds": []any{},
+		"camouflage": map[string]any{
+			"enabled": false,
+			"sites":   []any{},
+		},
 		"inbounds": []any{
 			map[string]any{
 				"tag":         "shadowtls-in",
@@ -2305,6 +2396,163 @@ func (s *PostgresStore) supportedProtocolsForNode(ctx context.Context, node doma
 	return supportedProtocolsFromConfig(cfg), nil
 }
 
+func (s *PostgresStore) RecordSubscriptionRequest(ctx context.Context, event domain.SubscriptionRequestEvent) error {
+	if event.ID == "" {
+		event.ID = uuid.NewString()
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	if len(event.QueryParams) == 0 {
+		event.QueryParams = json.RawMessage(`{}`)
+	}
+	if len(event.Headers) == 0 {
+		event.Headers = json.RawMessage(`{}`)
+	}
+	if event.DeviceKey == "" {
+		event.DeviceKey = event.RequestFingerprint
+	}
+	if event.DeviceSource == "" {
+		event.DeviceSource = "fingerprint"
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		insert into subscription_request_events (id, user_id, endpoint, client_ip, user_agent, device_key, device_identifier, device_source, request_fingerprint, query_params, headers, created_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12)`,
+		event.ID, event.UserID, event.Endpoint, event.ClientIP, event.UserAgent, event.DeviceKey, event.DeviceIdentifier, event.DeviceSource, event.RequestFingerprint, event.QueryParams, event.Headers, event.CreatedAt,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *PostgresStore) RegisterSubscriptionDevice(ctx context.Context, user domain.User, event domain.SubscriptionRequestEvent) error {
+	if event.DeviceKey == "" {
+		event.DeviceKey = event.RequestFingerprint
+	}
+	if event.DeviceSource == "" {
+		event.DeviceSource = "fingerprint"
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	if user.SubscriptionDeviceLimit > 0 {
+		if strings.TrimSpace(event.DeviceIdentifier) == "" {
+			return ErrSubscriptionDeviceIDRequired
+		}
+		var existingID string
+		err := s.db.QueryRowContext(ctx, `
+			select id
+			from user_subscription_devices
+			where user_id = $1 and device_key = $2 and blocked = false
+			limit 1`, user.ID, event.DeviceKey).Scan(&existingID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			var current int
+			if countErr := s.db.QueryRowContext(ctx, `
+				select count(*)::int
+				from user_subscription_devices
+				where user_id = $1 and blocked = false and coalesce(device_identifier, '') <> ''`, user.ID).Scan(&current); countErr != nil {
+				return countErr
+			}
+			if current >= user.SubscriptionDeviceLimit {
+				return ErrSubscriptionDeviceLimitReached
+			}
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `
+		insert into user_subscription_devices (id, user_id, device_key, device_identifier, device_source, first_seen_at, last_seen_at, last_client_ip, last_user_agent, request_count)
+		values ($1, $2, $3, $4, $5, $6, $6, $7, $8, 1)
+		on conflict (user_id, device_key) do update set
+			device_identifier = excluded.device_identifier,
+			device_source = excluded.device_source,
+			last_seen_at = excluded.last_seen_at,
+			last_client_ip = excluded.last_client_ip,
+			last_user_agent = excluded.last_user_agent,
+			request_count = user_subscription_devices.request_count + 1`,
+		uuid.NewString(), event.UserID, event.DeviceKey, event.DeviceIdentifier, event.DeviceSource, event.CreatedAt, event.ClientIP, event.UserAgent,
+	)
+	return err
+}
+
+func (s *PostgresStore) ClearUserSubscriptionDevices(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `delete from user_subscription_devices where user_id = $1`, userID)
+	return err
+}
+
+func (s *PostgresStore) ListUserSubscriptionDevices(ctx context.Context, userID string) ([]domain.SubscriptionDevice, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, user_id, device_key, device_identifier, device_source, first_seen_at, last_seen_at, last_client_ip, last_user_agent, request_count, blocked, blocked_at
+		from user_subscription_devices
+		where user_id = $1
+		order by last_seen_at desc`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var devices []domain.SubscriptionDevice
+	for rows.Next() {
+		var device domain.SubscriptionDevice
+		if err := rows.Scan(
+			&device.ID,
+			&device.UserID,
+			&device.DeviceKey,
+			&device.DeviceIdentifier,
+			&device.DeviceSource,
+			&device.FirstSeenAt,
+			&device.LastSeenAt,
+			&device.LastClientIP,
+			&device.LastUserAgent,
+			&device.RequestCount,
+			&device.Blocked,
+			&device.BlockedAt,
+		); err != nil {
+			return nil, err
+		}
+		devices = append(devices, device)
+	}
+	return devices, rows.Err()
+}
+
+func (s *PostgresStore) ListUserSubscriptionRequestEvents(ctx context.Context, userID string, limit int) ([]domain.SubscriptionRequestEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select id, user_id, endpoint, client_ip, user_agent, device_key, device_identifier, device_source, request_fingerprint, query_params, headers, created_at
+		from subscription_request_events
+		where user_id = $1
+		order by created_at desc
+		limit $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []domain.SubscriptionRequestEvent
+	for rows.Next() {
+		var event domain.SubscriptionRequestEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.UserID,
+			&event.Endpoint,
+			&event.ClientIP,
+			&event.UserAgent,
+			&event.DeviceKey,
+			&event.DeviceIdentifier,
+			&event.DeviceSource,
+			&event.RequestFingerprint,
+			&event.QueryParams,
+			&event.Headers,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 const schemaSQL = `
 create table if not exists admins (
 	id text primary key,
@@ -2327,6 +2575,7 @@ create table if not exists users (
 	traffic_used_bytes bigint not null default 0,
 	subscription_token text not null unique,
 	node_access_mode text not null,
+	subscription_device_limit integer not null default 0,
 	ss_password_encrypted text not null default '',
 	trojan_password_encrypted text not null default '',
 	vless_uuid text not null default '',
@@ -2343,6 +2592,7 @@ alter table users add column if not exists vless_uuid text not null default '';
 alter table users add column if not exists hysteria2_password_encrypted text not null default '';
 alter table users add column if not exists tuic_uuid text not null default '';
 alter table users add column if not exists tuic_password_encrypted text not null default '';
+alter table users add column if not exists subscription_device_limit integer not null default 0;
 
 create table if not exists tags (
 	id text primary key,
@@ -2445,4 +2695,40 @@ create table if not exists node_events (
 );
 
 create index if not exists idx_node_events_node_created_at on node_events (node_id, created_at desc);
+
+create table if not exists user_subscription_devices (
+	id text primary key,
+	user_id text not null references users(id) on delete cascade,
+	device_key text not null,
+	device_identifier text not null default '',
+	device_source text not null default '',
+	first_seen_at timestamptz not null,
+	last_seen_at timestamptz not null,
+	last_client_ip text not null default '',
+	last_user_agent text not null default '',
+	request_count bigint not null default 0,
+	blocked boolean not null default false,
+	blocked_at timestamptz,
+	unique (user_id, device_key)
+);
+
+create index if not exists idx_user_subscription_devices_user_last_seen on user_subscription_devices (user_id, last_seen_at desc);
+
+create table if not exists subscription_request_events (
+	id text primary key,
+	user_id text not null references users(id) on delete cascade,
+	endpoint text not null,
+	client_ip text not null default '',
+	user_agent text not null default '',
+	device_key text not null,
+	device_identifier text not null default '',
+	device_source text not null default '',
+	request_fingerprint text not null,
+	query_params jsonb not null default '{}'::jsonb,
+	headers jsonb not null default '{}'::jsonb,
+	created_at timestamptz not null
+);
+
+create index if not exists idx_subscription_request_events_user_created on subscription_request_events (user_id, created_at desc);
+create index if not exists idx_subscription_request_events_user_device on subscription_request_events (user_id, device_key, created_at desc);
 `

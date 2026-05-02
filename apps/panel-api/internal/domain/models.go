@@ -128,6 +128,7 @@ type User struct {
 	TrafficUsedBytes           int64          `json:"traffic_used_bytes"`
 	SubscriptionToken          string         `json:"subscription_token"`
 	NodeAccessMode             NodeAccessMode `json:"node_access_mode"`
+	SubscriptionDeviceLimit    int            `json:"subscription_device_limit"`
 	SSPasswordEncrypted        string         `json:"-"`
 	TrojanPasswordEncrypted    string         `json:"-"`
 	VLESSUUID                  string         `json:"-"`
@@ -288,4 +289,34 @@ type UserNodeProtocolAccess struct {
 	NodeID   string       `json:"node_id"`
 	Protocol ProtocolType `json:"protocol"`
 	Enabled  bool         `json:"enabled"`
+}
+
+type SubscriptionDevice struct {
+	ID               string     `json:"id"`
+	UserID           string     `json:"user_id"`
+	DeviceKey        string     `json:"device_key"`
+	DeviceIdentifier string     `json:"device_identifier,omitempty"`
+	DeviceSource     string     `json:"device_source"`
+	FirstSeenAt      time.Time  `json:"first_seen_at"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+	LastClientIP     string     `json:"last_client_ip,omitempty"`
+	LastUserAgent    string     `json:"last_user_agent,omitempty"`
+	RequestCount     int64      `json:"request_count"`
+	Blocked          bool       `json:"blocked"`
+	BlockedAt        *time.Time `json:"blocked_at,omitempty"`
+}
+
+type SubscriptionRequestEvent struct {
+	ID                 string          `json:"id"`
+	UserID             string          `json:"user_id"`
+	Endpoint           string          `json:"endpoint"`
+	ClientIP           string          `json:"client_ip,omitempty"`
+	UserAgent          string          `json:"user_agent,omitempty"`
+	DeviceKey          string          `json:"device_key"`
+	DeviceIdentifier   string          `json:"device_identifier,omitempty"`
+	DeviceSource       string          `json:"device_source"`
+	RequestFingerprint string          `json:"request_fingerprint"`
+	QueryParams        json.RawMessage `json:"query_params,omitempty"`
+	Headers            json.RawMessage `json:"headers,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
 }

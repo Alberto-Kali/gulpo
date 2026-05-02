@@ -5,7 +5,7 @@ RUN npm install
 
 FROM node:22-alpine AS builder
 WORKDIR /app
-ARG NEXT_PUBLIC_PANEL_BASE_PATH=""
+ARG NEXT_PUBLIC_PANEL_BASE_PATH="/panel"
 ENV NEXT_PUBLIC_PANEL_BASE_PATH=$NEXT_PUBLIC_PANEL_BASE_PATH
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/panel-web ./

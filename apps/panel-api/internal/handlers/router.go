@@ -1,12 +1,18 @@
 package handlers
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,6 +36,8 @@ func New(cfg config.Config, st *store.PostgresStore) http.Handler {
 	mux.HandleFunc("/api/admin/login", api.handleAdminLogin)
 	mux.HandleFunc("/api/subscriptions/", api.handleSubscription)
 	mux.HandleFunc("/api/subj/", api.handleSubj)
+	mux.HandleFunc("/api/camouflage/", api.handleCamouflage)
+	mux.HandleFunc("/api/camouflage", api.handleCamouflage)
 	mux.HandleFunc("/api/node/enroll", api.handleNodeEnroll)
 	mux.HandleFunc("/api/node/heartbeat", api.handleNodeHeartbeat)
 	mux.HandleFunc("/api/node/sync", api.handleNodeSync)
@@ -57,6 +65,10 @@ func New(cfg config.Config, st *store.PostgresStore) http.Handler {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/camouflage") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Node-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
@@ -173,6 +185,7 @@ func (a *API) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Status            domain.UserStatus     `json:"status"`
 			TrafficLimitBytes int64                 `json:"traffic_limit_bytes"`
 			NodeAccessMode    domain.NodeAccessMode `json:"node_access_mode"`
+			DeviceLimit       int                   `json:"subscription_device_limit"`
 			Tags              []string              `json:"tags"`
 			AllowedNodeIDs    []string              `json:"allowed_node_ids"`
 		}
@@ -181,11 +194,12 @@ func (a *API) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user, err := a.store.CreateUser(r.Context(), domain.User{
-			ExternalID:        req.ExternalID,
-			Name:              req.Name,
-			Status:            req.Status,
-			TrafficLimitBytes: req.TrafficLimitBytes,
-			NodeAccessMode:    req.NodeAccessMode,
+			ExternalID:              req.ExternalID,
+			Name:                    req.Name,
+			Status:                  req.Status,
+			TrafficLimitBytes:       req.TrafficLimitBytes,
+			NodeAccessMode:          req.NodeAccessMode,
+			SubscriptionDeviceLimit: req.DeviceLimit,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -262,6 +276,31 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(parts) == 3 && parts[1] == "subscription" && parts[2] == "devices" && r.Method == http.MethodGet {
+		devices, err := a.store.ListUserSubscriptionDevices(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, devices)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "subscription" && parts[2] == "requests" && r.Method == http.MethodGet {
+		limit := 50
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(raw, "%d", &parsed); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		events, err := a.store.ListUserSubscriptionRequestEvents(r.Context(), id, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, events)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "subscription" && r.Method == http.MethodPost {
 		token, err := a.store.RotateSubscriptionToken(r.Context(), id)
 		if err != nil {
@@ -288,6 +327,7 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			Status            *domain.UserStatus     `json:"status"`
 			TrafficLimitBytes *int64                 `json:"traffic_limit_bytes"`
 			NodeAccessMode    *domain.NodeAccessMode `json:"node_access_mode"`
+			DeviceLimit       *int                   `json:"subscription_device_limit"`
 			AllowedNodeIDs    *[]string              `json:"allowed_node_ids"`
 		}
 		if err := readJSON(r, &req); err != nil {
@@ -311,11 +351,12 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		updated := domain.User{
-			ExternalID:        current.ExternalID,
-			Name:              current.Name,
-			Status:            current.Status,
-			TrafficLimitBytes: current.TrafficLimitBytes,
-			NodeAccessMode:    current.NodeAccessMode,
+			ExternalID:              current.ExternalID,
+			Name:                    current.Name,
+			Status:                  current.Status,
+			TrafficLimitBytes:       current.TrafficLimitBytes,
+			NodeAccessMode:          current.NodeAccessMode,
+			SubscriptionDeviceLimit: current.SubscriptionDeviceLimit,
 		}
 		if req.ExternalID != nil {
 			updated.ExternalID = req.ExternalID
@@ -331,6 +372,9 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.NodeAccessMode != nil {
 			updated.NodeAccessMode = *req.NodeAccessMode
+		}
+		if req.DeviceLimit != nil {
+			updated.SubscriptionDeviceLimit = *req.DeviceLimit
 		}
 		user, err := a.store.UpdateUser(r.Context(), id, updated)
 		if err != nil {
@@ -617,6 +661,226 @@ func (a *API) handleGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type camouflageSite struct {
+	Name    string `json:"name,omitempty"`
+	Origin  string `json:"origin,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
+type camouflageConfig struct {
+	Enabled bool              `json:"enabled,omitempty"`
+	Sites   []camouflageSite  `json:"sites,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+func (a *API) handleCamouflage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := a.store.GetGlobalConfig(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	site, extraHeaders, ok := activeCamouflageSite(cfg.ConfigJSON)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	targetURL, err := camouflageTargetURL(site.Origin, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Header.Set("User-Agent", coalesceHeader(r.Header.Get("User-Agent"), "Mozilla/5.0"))
+	req.Header.Set("Accept", coalesceHeader(r.Header.Get("Accept"), "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"))
+	req.Header.Set("Accept-Language", coalesceHeader(r.Header.Get("Accept-Language"), "en-US,en;q=0.9"))
+	req.Header.Set("Accept-Encoding", "identity")
+	for key, value := range extraHeaders {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if resp.StatusCode == http.StatusNotFound && camouflageRequestPath(r) != "/" {
+		resp.Body.Close()
+		targetURL, err = camouflageTargetURLForPath(site.Origin, "/", "")
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		req, err = http.NewRequestWithContext(ctx, r.Method, targetURL, nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		req.Header.Set("User-Agent", coalesceHeader(r.Header.Get("User-Agent"), "Mozilla/5.0"))
+		req.Header.Set("Accept", coalesceHeader(r.Header.Get("Accept"), "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"))
+		req.Header.Set("Accept-Language", coalesceHeader(r.Header.Get("Accept-Language"), "en-US,en;q=0.9"))
+		req.Header.Set("Accept-Encoding", "identity")
+		for key, value := range extraHeaders {
+			if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+				req.Header.Set(key, value)
+			}
+		}
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	defer resp.Body.Close()
+	copyCamouflageHeaders(w.Header(), resp.Header)
+	if location := resp.Header.Get("Location"); location != "" {
+		if rewritten := rewriteCamouflageLocation(site.Origin, location); rewritten != "" {
+			w.Header().Set("Location", rewritten)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+func activeCamouflageSite(raw json.RawMessage) (camouflageSite, map[string]string, bool) {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return camouflageSite{}, nil, false
+	}
+	rawCamouflage, ok := root["camouflage"]
+	if !ok {
+		return camouflageSite{}, nil, false
+	}
+	body, err := json.Marshal(rawCamouflage)
+	if err != nil {
+		return camouflageSite{}, nil, false
+	}
+	var cfg camouflageConfig
+	if err := json.Unmarshal(body, &cfg); err != nil || !cfg.Enabled {
+		return camouflageSite{}, nil, false
+	}
+	for _, site := range cfg.Sites {
+		if strings.TrimSpace(site.Origin) == "" {
+			continue
+		}
+		if site.Enabled != nil && !*site.Enabled {
+			continue
+		}
+		return site, cfg.Headers, true
+	}
+	return camouflageSite{}, nil, false
+}
+
+func camouflageTargetURL(origin string, r *http.Request) (string, error) {
+	return camouflageTargetURLForPath(origin, camouflageRequestPath(r), r.URL.RawQuery)
+}
+
+func camouflageTargetURLForPath(origin string, requestPath string, rawQuery string) (string, error) {
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(origin), "/"))
+	if err != nil {
+		return "", err
+	}
+	if base.Scheme != "https" && base.Scheme != "http" {
+		return "", fmt.Errorf("camouflage origin must use http or https")
+	}
+	target := *base
+	target.Path = singleJoiningSlash(base.EscapedPath(), requestPath)
+	target.RawQuery = rawQuery
+	target.Fragment = ""
+	return target.String(), nil
+}
+
+func camouflageRequestPath(r *http.Request) string {
+	if forwardedPath := strings.TrimSpace(r.Header.Get("X-Gulpo-Camouflage-Path")); forwardedPath != "" {
+		if !strings.HasPrefix(forwardedPath, "/") {
+			return "/" + forwardedPath
+		}
+		return forwardedPath
+	}
+	path := strings.TrimPrefix(r.URL.EscapedPath(), "/api/camouflage")
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func copyCamouflageHeaders(dst, src http.Header) {
+	for key, values := range src {
+		if skipCamouflageHeader(key) {
+			continue
+		}
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func skipCamouflageHeader(key string) bool {
+	switch strings.ToLower(key) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "content-encoding", "content-length":
+		return true
+	default:
+		return false
+	}
+}
+
+func rewriteCamouflageLocation(origin string, location string) string {
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(origin), "/"))
+	if err != nil {
+		return location
+	}
+	resolved, err := base.Parse(location)
+	if err != nil {
+		return location
+	}
+	if resolved.Host == base.Host && resolved.Scheme == base.Scheme {
+		resolved.Scheme = ""
+		resolved.Host = ""
+	}
+	return resolved.String()
+}
+
+func singleJoiningSlash(left, right string) string {
+	if left == "" {
+		left = "/"
+	}
+	if right == "" {
+		right = "/"
+	}
+	leftSlash := strings.HasSuffix(left, "/")
+	rightSlash := strings.HasPrefix(right, "/")
+	switch {
+	case leftSlash && rightSlash:
+		return left + strings.TrimPrefix(right, "/")
+	case !leftSlash && !rightSlash:
+		return left + "/" + right
+	default:
+		return left + right
+	}
+}
+
+func coalesceHeader(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
 func (a *API) handleSubscription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -630,6 +894,19 @@ func (a *API) handleSubscription(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	event, ok := a.recordSubscriptionRequest(r, user, "subscriptions")
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record subscription request"})
+		return
+	}
+	decision, err := a.checkSubscriptionDevice(r, user, event)
+	if decision == subscriptionDeviceMissingHWID {
+		writeJSON(w, http.StatusOK, emptySubscriptionEnvelope(user, "subscription hwid is required for this user"))
+		return
+	}
+	if !writeBlockedSubscription(w, decision, err) {
 		return
 	}
 	envelope, err := a.store.BuildSubscription(r.Context(), user)
@@ -655,12 +932,123 @@ func (a *API) handleSubj(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	event, ok := a.recordSubscriptionRequest(r, user, "subj")
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record subscription request"})
+		return
+	}
+	decision, err := a.checkSubscriptionDevice(r, user, event)
+	if decision == subscriptionDeviceMissingHWID {
+		writeJSON(w, http.StatusOK, emptyProfilePage(user, "subscription hwid is required for this user"))
+		return
+	}
+	if !writeBlockedSubscription(w, decision, err) {
+		return
+	}
 	profiles, err := a.store.BuildProfilePage(r.Context(), user)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, profiles)
+}
+
+func (a *API) recordSubscriptionRequest(r *http.Request, user domain.User, endpoint string) (domain.SubscriptionRequestEvent, bool) {
+	event := subscriptionRequestEventFromHTTP(r, user.ID, endpoint)
+	if err := a.store.RecordSubscriptionRequest(r.Context(), event); err != nil {
+		log.Printf("record subscription request failed: %v", err)
+		return event, false
+	}
+	return event, true
+}
+
+type subscriptionDeviceDecision string
+
+const (
+	subscriptionDeviceAllowed     subscriptionDeviceDecision = "allowed"
+	subscriptionDeviceMissingHWID subscriptionDeviceDecision = "missing_hwid"
+	subscriptionDeviceLimit       subscriptionDeviceDecision = "limit"
+	subscriptionDeviceFailed      subscriptionDeviceDecision = "failed"
+)
+
+func (a *API) checkSubscriptionDevice(r *http.Request, user domain.User, event domain.SubscriptionRequestEvent) (subscriptionDeviceDecision, error) {
+	if err := a.store.RegisterSubscriptionDevice(r.Context(), user, event); err != nil {
+		switch {
+		case errors.Is(err, store.ErrSubscriptionDeviceIDRequired):
+			return subscriptionDeviceMissingHWID, err
+		case errors.Is(err, store.ErrSubscriptionDeviceLimitReached):
+			return subscriptionDeviceLimit, err
+		default:
+			return subscriptionDeviceFailed, err
+		}
+	}
+	return subscriptionDeviceAllowed, nil
+}
+
+func writeBlockedSubscription(w http.ResponseWriter, decision subscriptionDeviceDecision, err error) bool {
+	switch decision {
+	case subscriptionDeviceAllowed:
+		return true
+	case subscriptionDeviceLimit:
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "subscription device limit reached"})
+	case subscriptionDeviceFailed:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "subscription device check failed"})
+	}
+	return false
+}
+
+func emptySubscriptionEnvelope(user domain.User, message string) domain.SubscriptionEnvelope {
+	return domain.SubscriptionEnvelope{
+		Version: "1",
+		Nodes:   []domain.SubscriptionNode{},
+		Meta: map[string]interface{}{
+			"user_id":      user.ID,
+			"generated_at": time.Now().UTC().Format(time.RFC3339),
+			"transport":    "multi",
+			"subscription": user.SubscriptionToken,
+			"message":      message,
+		},
+	}
+}
+
+func emptyProfilePage(user domain.User, message string) domain.ProfilePageResponse {
+	return domain.ProfilePageResponse{
+		UserName:     user.Name,
+		UserStatus:   user.Status,
+		Subscription: user.SubscriptionToken,
+		Profiles:     []domain.ProfileItem{},
+		Message:      message,
+	}
+}
+
+func subscriptionRequestEventFromHTTP(r *http.Request, userID, endpoint string) domain.SubscriptionRequestEvent {
+	clientIP := clientIPFromRequest(r)
+	userAgent := strings.TrimSpace(r.UserAgent())
+	deviceID, deviceSource := deviceIdentifierFromRequest(r)
+	queryJSON := mustJSON(subscriptionQueryParams(r))
+	headersJSON := mustJSON(subscriptionHeaders(r))
+	fingerprint := requestFingerprint(clientIP, userAgent, r.URL.RawQuery, headersJSON)
+	deviceKey := fingerprint
+	if deviceID != "" {
+		deviceKey = stableHash(deviceSource + "\x00" + deviceID)
+	} else {
+		deviceSource = "fingerprint"
+	}
+	return domain.SubscriptionRequestEvent{
+		UserID:             userID,
+		Endpoint:           endpoint,
+		ClientIP:           clientIP,
+		UserAgent:          userAgent,
+		DeviceKey:          deviceKey,
+		DeviceIdentifier:   deviceID,
+		DeviceSource:       deviceSource,
+		RequestFingerprint: fingerprint,
+		QueryParams:        queryJSON,
+		Headers:            headersJSON,
+		CreatedAt:          time.Now().UTC(),
+	}
 }
 
 func (a *API) handleNodeEnroll(w http.ResponseWriter, r *http.Request) {
@@ -930,4 +1318,108 @@ func pathHasSuffix(path, suffix string) bool {
 		return true
 	}
 	return strings.HasSuffix(path, "."+suffix)
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"} {
+		raw := strings.TrimSpace(r.Header.Get(header))
+		if raw == "" {
+			continue
+		}
+		if header == "X-Forwarded-For" {
+			parts := strings.Split(raw, ",")
+			raw = strings.TrimSpace(parts[0])
+		}
+		if raw != "" {
+			return raw
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func deviceIdentifierFromRequest(r *http.Request) (string, string) {
+	queryKeys := []string{
+		"hwid", "HWID", "device_id", "deviceId", "device", "device_name",
+		"client_id", "clientId", "client", "sub_id", "subid", "sid", "id",
+	}
+	for _, key := range queryKeys {
+		if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {
+			return truncateValue(value, 256), "query:" + key
+		}
+	}
+	headerKeys := []string{
+		"X-HWID", "X-Hwid", "X-Device-ID", "X-Device-Id", "X-Device",
+		"X-Client-ID", "X-Client-Id", "X-Client", "Client-ID", "Device-ID",
+	}
+	for _, key := range headerKeys {
+		if value := strings.TrimSpace(r.Header.Get(key)); value != "" {
+			return truncateValue(value, 256), "header:" + http.CanonicalHeaderKey(key)
+		}
+	}
+	return "", ""
+}
+
+func subscriptionQueryParams(r *http.Request) map[string][]string {
+	out := map[string][]string{}
+	for key, values := range r.URL.Query() {
+		if key == "" {
+			continue
+		}
+		copied := make([]string, 0, len(values))
+		for _, value := range values {
+			copied = append(copied, truncateValue(value, 512))
+		}
+		out[key] = copied
+	}
+	return out
+}
+
+func subscriptionHeaders(r *http.Request) map[string]string {
+	allow := []string{
+		"User-Agent", "X-HWID", "X-Hwid", "X-Device-ID", "X-Device-Id", "X-Device",
+		"X-Client-ID", "X-Client-Id", "X-Client", "Client-ID", "Device-ID",
+		"X-Requested-With", "Accept", "Accept-Language", "CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For",
+	}
+	out := map[string]string{}
+	for _, key := range allow {
+		value := strings.TrimSpace(r.Header.Get(key))
+		if value != "" {
+			out[http.CanonicalHeaderKey(key)] = truncateValue(value, 512)
+		}
+	}
+	return out
+}
+
+func mustJSON(value any) json.RawMessage {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return data
+}
+
+func requestFingerprint(clientIP, userAgent, rawQuery string, headers json.RawMessage) string {
+	return stableHash(strings.Join([]string{
+		clientIP,
+		userAgent,
+		rawQuery,
+		string(headers),
+	}, "\x00"))
+}
+
+func stableHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func truncateValue(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
 }

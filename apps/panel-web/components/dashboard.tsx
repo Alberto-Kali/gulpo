@@ -11,6 +11,8 @@ import {
   getGlobalConfig,
   getNodeConfig,
   getUserProtocolAccess,
+  listUserSubscriptionDevices,
+  listUserSubscriptionRequests,
   listNodes,
   listNodeEvents,
   listUsers,
@@ -20,6 +22,8 @@ import {
   rotateNodeEnrollToken,
   rotateUserSubscription,
   sendNodeCommand,
+  SubscriptionDevice,
+  SubscriptionRequestEvent,
   updateGlobalConfig,
   updateNode,
   updateNodeConfig,
@@ -41,6 +45,7 @@ type UserForm = {
   name: string;
   status: string;
   trafficLimitBytes: string;
+  subscriptionDeviceLimit: string;
   nodeAccessMode: string;
   tagsText: string;
   allowedNodeIDs: string[];
@@ -60,6 +65,10 @@ const initialConfig = {
   log: { level: "info" },
   outbounds: [],
   route: { final: "direct" },
+  camouflage: {
+    enabled: false,
+    sites: [],
+  },
 };
 
 const initialSummary: DashboardSummary = {
@@ -80,6 +89,7 @@ function buildUserForm(user: User): UserForm {
     name: user.name,
     status: user.status,
     trafficLimitBytes: String(user.traffic_limit_bytes ?? 0),
+    subscriptionDeviceLimit: String(user.subscription_device_limit ?? 0),
     nodeAccessMode: user.node_access_mode || "tags",
     tagsText: tagsToText(user.tags),
     allowedNodeIDs: Array.isArray(user.allowed_node_ids) ? user.allowed_node_ids : [],
@@ -127,6 +137,61 @@ function formatBytes(value: number) {
   }
   const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2;
   return `${size.toFixed(digits)} ${units[index]}`;
+}
+
+type CamouflageSite = {
+  name?: string;
+  origin?: string;
+  enabled?: boolean;
+};
+
+type CamouflageSettings = {
+  enabled: boolean;
+  sites: CamouflageSite[];
+};
+
+function parseGlobalConfig(text: string) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function camouflageFromConfig(text: string): CamouflageSettings {
+  const parsed = parseGlobalConfig(text);
+  const raw = parsed?.camouflage;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { enabled: false, sites: [] };
+  }
+  const source = raw as Record<string, unknown>;
+  const sites = Array.isArray(source.sites)
+    ? source.sites
+        .filter((site): site is Record<string, unknown> => Boolean(site) && typeof site === "object" && !Array.isArray(site))
+        .map((site) => ({
+          name: typeof site.name === "string" ? site.name : "",
+          origin: typeof site.origin === "string" ? site.origin : "",
+          enabled: typeof site.enabled === "boolean" ? site.enabled : true,
+        }))
+    : [];
+  return { enabled: source.enabled === true, sites };
+}
+
+function updateCamouflageInConfig(text: string, next: CamouflageSettings) {
+  const parsed = parseGlobalConfig(text) ?? { ...initialConfig };
+  parsed.camouflage = {
+    enabled: next.enabled,
+    sites: next.sites.map((site) => ({
+      name: site.name ?? "",
+      origin: site.origin ?? "",
+      enabled: site.enabled !== false,
+    })),
+  };
+  return JSON.stringify(parsed, null, 2);
 }
 
 function formatDateTime(value?: string | null) {
@@ -183,6 +248,8 @@ export function Dashboard({ defaultLogin }: Props) {
   const [userDialogBusy, setUserDialogBusy] = useState(false);
   const [userDialogNotice, setUserDialogNotice] = useState("");
   const [userProtocolAccess, setUserProtocolAccess] = useState<UserNodeProtocolAccess[]>([]);
+  const [subscriptionDevices, setSubscriptionDevices] = useState<SubscriptionDevice[]>([]);
+  const [subscriptionRequests, setSubscriptionRequests] = useState<SubscriptionRequestEvent[]>([]);
   const [nodeDialog, setNodeDialog] = useState<Node | null>(null);
   const [nodeForm, setNodeForm] = useState<NodeForm | null>(null);
   const [nodeConfigText, setNodeConfigText] = useState("{}");
@@ -240,6 +307,7 @@ export function Dashboard({ defaultLogin }: Props) {
         name: `user-${users.length + 1}`,
         status: "active",
         traffic_limit_bytes: 10737418240,
+        subscription_device_limit: 0,
         node_access_mode: "tags",
         tags: ["default"],
       });
@@ -294,14 +362,50 @@ export function Dashboard({ defaultLogin }: Props) {
     }
   }
 
+  function setCamouflage(next: CamouflageSettings) {
+    setConfigText((current) => updateCamouflageInConfig(current, next));
+  }
+
+  function updateCamouflageSite(index: number, patch: Partial<CamouflageSite>) {
+    const current = camouflageFromConfig(configText);
+    const sites = current.sites.map((site, siteIndex) => (siteIndex === index ? { ...site, ...patch } : site));
+    setCamouflage({ ...current, sites });
+  }
+
+  function addCamouflageSite() {
+    const current = camouflageFromConfig(configText);
+    setCamouflage({
+      ...current,
+      sites: [...current.sites, { name: "", origin: "https://example.com", enabled: true }],
+    });
+  }
+
+  function removeCamouflageSite(index: number) {
+    const current = camouflageFromConfig(configText);
+    setCamouflage({
+      ...current,
+      sites: current.sites.filter((_, siteIndex) => siteIndex !== index),
+    });
+  }
+
   function openUserDialog(user: User) {
     setUserDialog(user);
     setUserForm(buildUserForm(user));
     setUserDialogNotice("");
     setUserProtocolAccess([]);
+    setSubscriptionDevices([]);
+    setSubscriptionRequests([]);
     if (!token) return;
-    void getUserProtocolAccess(token, user.id)
-      .then(setUserProtocolAccess)
+    void Promise.all([
+      getUserProtocolAccess(token, user.id),
+      listUserSubscriptionDevices(token, user.id),
+      listUserSubscriptionRequests(token, user.id, 20),
+    ])
+      .then(([protocolAccess, devices, requests]) => {
+        setUserProtocolAccess(protocolAccess);
+        setSubscriptionDevices(devices);
+        setSubscriptionRequests(requests);
+      })
       .catch((err) => setUserDialogNotice(err instanceof Error ? err.message : "Could not load protocol access"));
   }
 
@@ -332,6 +436,8 @@ export function Dashboard({ defaultLogin }: Props) {
     setUserForm(null);
     setUserDialogBusy(false);
     setUserDialogNotice("");
+    setSubscriptionDevices([]);
+    setSubscriptionRequests([]);
   }
 
   function closeNodeDialog() {
@@ -362,6 +468,7 @@ export function Dashboard({ defaultLogin }: Props) {
         name: userForm.name,
         status: userForm.status,
         traffic_limit_bytes: Number(userForm.trafficLimitBytes) || 0,
+        subscription_device_limit: Math.max(0, Number(userForm.subscriptionDeviceLimit) || 0),
         node_access_mode: userForm.nodeAccessMode,
         allowed_node_ids: userForm.nodeAccessMode === "explicit" ? userForm.allowedNodeIDs : [],
       });
@@ -510,6 +617,8 @@ export function Dashboard({ defaultLogin }: Props) {
       </section>
     );
   }
+
+  const camouflage = camouflageFromConfig(configText);
 
   return (
     <>
@@ -739,6 +848,57 @@ export function Dashboard({ defaultLogin }: Props) {
               <button onClick={onSaveConfig} disabled={busy}>Save Global Config</button>
             </div>
             <div className="form">
+              <div className="config-subpanel">
+                <div className="table-toolbar compact-toolbar">
+                  <div>
+                    <h4>Camouflage Sites</h4>
+                    <p className="section-copy">Unknown HTTP routes on panel and nodes can mirror the first enabled site from this list.</p>
+                  </div>
+                  <label className="toggle-field">
+                    <input
+                      type="checkbox"
+                      checked={camouflage.enabled}
+                      onChange={(event) => setCamouflage({ ...camouflage, enabled: event.target.checked })}
+                    />
+                    <span>Enabled</span>
+                  </label>
+                </div>
+                <div className="camouflage-list">
+                  {camouflage.sites.length === 0 ? (
+                    <div className="empty-state">No camouflage sites configured.</div>
+                  ) : null}
+                  {camouflage.sites.map((site, index) => (
+                    <div className="camouflage-row" key={index}>
+                      <label className="field">
+                        <span>Name</span>
+                        <input
+                          value={site.name ?? ""}
+                          onChange={(event) => updateCamouflageSite(index, { name: event.target.value })}
+                          placeholder="Mirror name"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Origin URL</span>
+                        <input
+                          value={site.origin ?? ""}
+                          onChange={(event) => updateCamouflageSite(index, { origin: event.target.value })}
+                          placeholder="https://example.com"
+                        />
+                      </label>
+                      <label className="toggle-field row-toggle">
+                        <input
+                          type="checkbox"
+                          checked={site.enabled !== false}
+                          onChange={(event) => updateCamouflageSite(index, { enabled: event.target.checked })}
+                        />
+                        <span>Active</span>
+                      </label>
+                      <button className="secondary" onClick={() => removeCamouflageSite(index)} type="button">Remove</button>
+                    </div>
+                  ))}
+                </div>
+                <button className="secondary" onClick={addCamouflageSite} type="button">Add Site</button>
+              </div>
               <textarea className="config-editor" value={configText} onChange={(event) => setConfigText(event.target.value)} />
             </div>
           </div>
@@ -797,6 +957,14 @@ export function Dashboard({ defaultLogin }: Props) {
                   />
                 </label>
               </div>
+              <label className="field">
+                <span>Subscription Device Limit</span>
+                <input
+                  value={userForm.subscriptionDeviceLimit}
+                  onChange={(event) => setUserForm({ ...userForm, subscriptionDeviceLimit: event.target.value })}
+                  inputMode="numeric"
+                />
+              </label>
 
               {userForm.nodeAccessMode === "explicit" ? (
                 <div className="field">
@@ -849,6 +1017,64 @@ export function Dashboard({ defaultLogin }: Props) {
                   <a className="inline-link wrap-anywhere" href={`/subj/${userDialog.subscription_token}`} target="_blank" rel="noreferrer">
                     Open legacy /subj/{userDialog.subscription_token}
                   </a>
+                </div>
+              </div>
+              <div className="field">
+                <span>Subscription Devices</span>
+                <div className="table-wrap compact-table-wrap">
+                  <table className="data-table compact-table">
+                    <thead>
+                      <tr>
+                        <th>Device</th>
+                        <th>Source</th>
+                        <th>Requests</th>
+                        <th>Last Seen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {subscriptionDevices.length === 0 ? (
+                        <tr>
+                          <td colSpan={4}>
+                            <div className="empty-state">No subscription requests observed yet.</div>
+                          </td>
+                        </tr>
+                      ) : null}
+                      {subscriptionDevices.map((device) => (
+                        <tr key={device.id}>
+                          <td>
+                            <div className="table-primary">
+                              <strong className="wrap-anywhere">{device.device_identifier || device.device_key.slice(0, 16)}</strong>
+                              <span className="muted-text wrap-anywhere">{device.last_client_ip || "unknown ip"}</span>
+                            </div>
+                          </td>
+                          <td><span className="pill subtle">{device.device_source}</span></td>
+                          <td>{device.request_count}</td>
+                          <td>
+                            <div className="table-primary">
+                              <strong>{formatRelativeTime(device.last_seen_at)}</strong>
+                              <span className="muted-text wrap-anywhere">{device.last_user_agent || "unknown client"}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="field">
+                <span>Recent Subscription Requests</span>
+                <div className="event-list">
+                  {subscriptionRequests.length === 0 ? <div className="empty-state">No recent requests.</div> : null}
+                  {subscriptionRequests.slice(0, 8).map((request) => (
+                    <article className="event-card" key={request.id}>
+                      <div className="event-main">
+                        <span className="pill subtle">{request.endpoint}</span>
+                        <strong className="wrap-anywhere">{request.device_identifier || request.device_key.slice(0, 16)}</strong>
+                        <span className="muted-text wrap-anywhere">{request.device_source} · {request.client_ip || "unknown ip"}</span>
+                      </div>
+                      <span className="muted-text wrap-anywhere">{formatRelativeTime(request.created_at)} · {request.user_agent || "unknown client"}</span>
+                    </article>
+                  ))}
                 </div>
               </div>
               <div className="field">

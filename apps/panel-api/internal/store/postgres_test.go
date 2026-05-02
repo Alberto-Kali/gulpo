@@ -211,6 +211,51 @@ func TestResolveNodeRuntimeConfigPatchesSupportedProtocols(t *testing.T) {
 	}
 }
 
+func TestApplyNodeTemplateValuesUsesNodeDomain(t *testing.T) {
+	node := domain.Node{Domain: "beta.gulpo.pw:443"}
+	cfg := map[string]any{
+		"inbounds": []any{
+			map[string]any{
+				"type": "trojan",
+				"tls": map[string]any{
+					"server_name":      "__GULPO_NODE_DOMAIN__",
+					"certificate_path": "__GULPO_TLS_CERTIFICATE_PATH__",
+					"key_path":         "__GULPO_TLS_KEY_PATH__",
+				},
+			},
+			map[string]any{
+				"type": "hysteria2",
+				"tls": map[string]any{
+					"server_name": "{{node.domain}}",
+				},
+			},
+		},
+		"camouflage": map[string]any{"enabled": true},
+	}
+
+	applyNodeTemplateValues(cfg, node)
+	inbounds := cfg["inbounds"].([]any)
+	trojanTLS := inbounds[0].(map[string]any)["tls"].(map[string]any)
+	if trojanTLS["server_name"] != "beta.gulpo.pw" {
+		t.Fatalf("expected node server_name, got %#v", trojanTLS["server_name"])
+	}
+	if trojanTLS["certificate_path"] != "/etc/letsencrypt/live/beta.gulpo.pw/fullchain.pem" {
+		t.Fatalf("expected node certificate path, got %#v", trojanTLS["certificate_path"])
+	}
+	if trojanTLS["key_path"] != "/etc/letsencrypt/live/beta.gulpo.pw/privkey.pem" {
+		t.Fatalf("expected node key path, got %#v", trojanTLS["key_path"])
+	}
+	hy2TLS := inbounds[1].(map[string]any)["tls"].(map[string]any)
+	if hy2TLS["server_name"] != "beta.gulpo.pw" {
+		t.Fatalf("expected alternate token replacement, got %#v", hy2TLS["server_name"])
+	}
+
+	stripControlPlaneConfig(cfg)
+	if _, ok := cfg["camouflage"]; ok {
+		t.Fatalf("expected camouflage to be stripped from node runtime config")
+	}
+}
+
 func TestBuildNodeProfilesPrefersShadowTLSAndRealityDetails(t *testing.T) {
 	box := secretcrypto.NewSecretBox("test-secret")
 	ssPassword, _ := box.Encrypt("ss-user-secret")

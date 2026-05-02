@@ -1,11 +1,28 @@
 import { ProfileActions } from "../../../components/profile-actions";
 import { getSubjProfiles } from "../../../lib/server-api";
+import { headers } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
-export default async function SubjPage({ params }: { params: Promise<{ token: string }> }) {
+export default async function SubjPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { token } = await params;
-  const result = await getSubjProfiles(token);
+  const query = new URLSearchParams();
+  const resolvedSearchParams = await searchParams;
+  for (const [key, value] of Object.entries(resolvedSearchParams)) {
+    if (Array.isArray(value)) {
+      for (const item of value) query.append(key, item);
+    } else if (value !== undefined) {
+      query.set(key, value);
+    }
+  }
+  const search = query.size > 0 ? `?${query.toString()}` : "";
+  const result = await getSubjProfiles(token, await headers(), search);
 
   if (!result.data) {
     return (

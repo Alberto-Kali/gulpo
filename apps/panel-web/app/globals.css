@@ -240,6 +240,19 @@ pre {
   background: rgba(245, 242, 234, 0.025);
 }
 
+.compact-table-wrap {
+  border-radius: 12px;
+}
+
+.compact-table {
+  min-width: 680px;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 10px 12px;
+}
+
 .table-primary,
 .code-link-stack,
 .table-actions,
@@ -421,6 +434,51 @@ textarea {
   max-width: 100%;
 }
 
+.config-subpanel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.config-subpanel h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.compact-toolbar {
+  margin-bottom: 0;
+}
+
+.toggle-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.toggle-field input {
+  width: auto;
+}
+
+.camouflage-list {
+  display: grid;
+  gap: 10px;
+}
+
+.camouflage-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.4fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.row-toggle {
+  min-height: 40px;
+}
+
 .form,
 .dialog-body {
   display: grid;
@@ -560,6 +618,13 @@ pre {
   gap: 8px;
 }
 
+.event-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .event-card p {
   margin: 0;
 }
@@ -635,6 +700,7 @@ pre {
   .split,
   .split-3,
   .card-grid,
+  .camouflage-row,
   .profile-grid {
     grid-template-columns: 1fr;
   }

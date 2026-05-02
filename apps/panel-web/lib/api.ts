@@ -38,6 +38,7 @@ export type User = {
   traffic_used_bytes: number;
   subscription_token: string;
   node_access_mode: string;
+  subscription_device_limit: number;
   tags?: Tag[] | null;
   allowed_node_ids?: string[] | null;
   is_online?: boolean;
@@ -71,6 +72,36 @@ export type UserNodeProtocolAccess = {
   enabled: boolean;
 };
 
+export type SubscriptionDevice = {
+  id: string;
+  user_id: string;
+  device_key: string;
+  device_identifier?: string;
+  device_source: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_client_ip?: string;
+  last_user_agent?: string;
+  request_count: number;
+  blocked: boolean;
+  blocked_at?: string | null;
+};
+
+export type SubscriptionRequestEvent = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  client_ip?: string;
+  user_agent?: string;
+  device_key: string;
+  device_identifier?: string;
+  device_source: string;
+  request_fingerprint: string;
+  query_params?: Record<string, string[]>;
+  headers?: Record<string, string>;
+  created_at: string;
+};
+
 export type NodeEvent = {
   id: string;
   node_id: string;
@@ -95,6 +126,7 @@ function normalizeUser(user: User): User {
     external_id: user.external_id ?? null,
     tags: Array.isArray(user.tags) ? user.tags : [],
     allowed_node_ids: Array.isArray(user.allowed_node_ids) ? user.allowed_node_ids : [],
+    subscription_device_limit: Number(user.subscription_device_limit ?? 0),
     is_online: Boolean(user.is_online),
     active_sessions: Number(user.active_sessions ?? 0),
   };
@@ -273,6 +305,26 @@ export async function updateUserProtocolAccess(token: string, userId: string, en
       body: JSON.stringify({ entries }),
     }),
   );
+}
+
+export async function listUserSubscriptionDevices(token: string, userId: string) {
+  const data = await parse<SubscriptionDevice[] | null>(
+    await fetch(`${API_BASE}/api/admin/users/${userId}/subscription/devices`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    }),
+  );
+  return Array.isArray(data) ? data : [];
+}
+
+export async function listUserSubscriptionRequests(token: string, userId: string, limit = 50) {
+  const data = await parse<SubscriptionRequestEvent[] | null>(
+    await fetch(`${API_BASE}/api/admin/users/${userId}/subscription/requests?limit=${limit}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    }),
+  );
+  return Array.isArray(data) ? data : [];
 }
 
 export async function deleteNode(token: string, nodeId: string) {

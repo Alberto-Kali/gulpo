@@ -19,6 +19,7 @@ create table if not exists users (
 	traffic_used_bytes bigint not null default 0,
 	subscription_token text not null unique,
 	node_access_mode text not null,
+	subscription_device_limit integer not null default 0,
 	ss_password_encrypted text not null default '',
 	trojan_password_encrypted text not null default '',
 	vless_uuid text not null default '',
@@ -35,6 +36,7 @@ alter table users add column if not exists vless_uuid text not null default '';
 alter table users add column if not exists hysteria2_password_encrypted text not null default '';
 alter table users add column if not exists tuic_uuid text not null default '';
 alter table users add column if not exists tuic_password_encrypted text not null default '';
+alter table users add column if not exists subscription_device_limit integer not null default 0;
 
 create table if not exists tags (
 	id text primary key,
@@ -137,3 +139,39 @@ create table if not exists node_events (
 );
 
 create index if not exists idx_node_events_node_created_at on node_events (node_id, created_at desc);
+
+create table if not exists user_subscription_devices (
+	id text primary key,
+	user_id text not null references users(id) on delete cascade,
+	device_key text not null,
+	device_identifier text not null default '',
+	device_source text not null default '',
+	first_seen_at timestamptz not null,
+	last_seen_at timestamptz not null,
+	last_client_ip text not null default '',
+	last_user_agent text not null default '',
+	request_count bigint not null default 0,
+	blocked boolean not null default false,
+	blocked_at timestamptz,
+	unique (user_id, device_key)
+);
+
+create index if not exists idx_user_subscription_devices_user_last_seen on user_subscription_devices (user_id, last_seen_at desc);
+
+create table if not exists subscription_request_events (
+	id text primary key,
+	user_id text not null references users(id) on delete cascade,
+	endpoint text not null,
+	client_ip text not null default '',
+	user_agent text not null default '',
+	device_key text not null,
+	device_identifier text not null default '',
+	device_source text not null default '',
+	request_fingerprint text not null,
+	query_params jsonb not null default '{}'::jsonb,
+	headers jsonb not null default '{}'::jsonb,
+	created_at timestamptz not null
+);
+
+create index if not exists idx_subscription_request_events_user_created on subscription_request_events (user_id, created_at desc);
+create index if not exists idx_subscription_request_events_user_device on subscription_request_events (user_id, device_key, created_at desc);
